@@ -30,7 +30,7 @@ load_dotenv()  # Carica i segreti dall'.env
 # cursor = None
 # endregion
 
-# region Functions
+# region Connessioni
 def init_app_db():
     global conn_app
     global cursor_app
@@ -71,6 +71,19 @@ def init_app_db():
         conn_app.commit()
         if args.verbose:
             print("Tabella odin_by_date creata.")
+
+        create_table_query = """
+                    CREATE TABLE IF NOT EXISTS imported_ts_files (
+                        nome TEXT NOT NULL,
+                        data TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE (nome)
+                    );
+                    """
+        cursor_app.execute(create_table_query)
+        conn_app.commit()
+        if args.verbose:
+            print("Tabella imported_ts_files creata.")
+
     except sqlite3.Error as e:
         print(e)
         exit(1)
@@ -110,6 +123,105 @@ def connect_db_odin():
     return tunnel, conn
 
 
+# end region
+
+# region Queries
+def get_odin_inventario_completo_total_rows():
+    if args.verbose:
+        print("Conto righe inventario Odin...")
+    cursor_odin.execute(
+        "SELECT COUNT(*) FROM inventario_completo ic LEFT JOIN prodotti p ON ic.id_prod = p.id LEFT JOIN sedi s ON s.id = ic.id_sede;")
+    return cursor_odin.fetchone()[0]
+
+
+def get_imported_ts_files():
+    global cursor_app
+    query = """
+    SELECT nome FROM imported_ts_files;
+    """
+    cursor_app.execute(query)
+    result = cursor_app.fetchall()
+    return [x[0] for x in result]
+
+
+def insert_imported_ts_file(name):
+    global cursor_app
+    query = """
+    INSERT INTO imported_ts_files (nome) VALUES (?);
+    """
+    cursor_app.execute(query, (name,))
+    conn_app.commit()
+
+
+def get_odin_inventario_completo_as_df(batchsize=5):
+    global total_rows_odin
+    offset = 0
+    with tqdm(total=total_rows_odin, desc="Carico dati Odin...", unit="righe") as pbar:
+        while offset < total_rows_odin:
+            query = f"""
+            SELECT
+            IFNULL(cod,old_cod) AS sku,
+            qta,
+            luogo,
+            sezione AS sez,
+            s.nome AS sede,
+            ic.data_creazione AS `data`,
+            ic.ultima_modifica AS ultima_modifica,
+            ic.note,
+            u.username
+            FROM inventario_completo ic 
+            LEFT JOIN prodotti p ON ic.id_prod = p.id
+            LEFT JOIN sedi s ON s.id = ic.id_sede
+            LEFT JOIN users u ON u.id = ic.id_user
+            LIMIT {batchsize} OFFSET {offset};
+            """
+            cursor_odin.execute(query)
+            result = cursor_odin.fetchall()
+            if not result:
+                break
+            result = pd.DataFrame.from_records(result,
+                                               columns=["sku", "qta", "luogo", "sez", "sede", "data", "ultima_modifica",
+                                                        "note", "username"])
+            yield result
+            offset += batchsize
+            pbar.update(len(result))
+
+
+def import_df_in_ts_by_date(df):
+    if args.verbose:
+        print("Eseguo query importazione in ts_bt_date...")
+    for _, row in tqdm(df.iterrows(), total=df.shape[0]):
+        cursor_app.execute("""
+        INSERT OR IGNORE INTO ts_by_date (sku, data, qta, dep)
+        VALUES (?,?,?,?)
+        """, (row['sku'], row['data'], row['qta'], row['dep']))
+    conn_app.commit()
+
+
+def import_df_in_odin_by_date(df):
+    for _, row in tqdm(df.iterrows(), total=df.shape[0], desc="Eseguo query importazione in odin_by_date...",
+                       unit="righe"):
+        row['data'] = row['data'].strftime('%Y-%m-%d %H:%M:%S')
+        row['ultima_modifica'] = row['ultima_modifica'].strftime('%Y-%m-%d %H:%M:%S')
+        cursor_app.execute("""
+        INSERT  OR IGNORE INTO odin_by_date (sku, qta, luogo, sez, sede, data, ultima_modifica, note, username)
+        VALUES (?,?,?,?,?,?,?,?,?)
+        """, (
+            row['sku'],
+            row['qta'],
+            row['luogo'],
+            row['sez'],
+            row['sede'],
+            row['data'],
+            row['ultima_modifica'],
+            row['note'],
+            row['username']))
+    conn_app.commit()
+
+
+# end region
+
+# region Files
 # Funzione per estrarre la data dal nome del file
 def extract_date_from_filename(name):
     match = re.search(r'(\d{2})-(\d{2})-(\d{4})', name)
@@ -162,80 +274,16 @@ def get_xlsx_as_df(file, table):
     return df
 
 
-def get_odin_inventario_completo_total_rows():
-    if args.verbose:
-        print("Conto righe inventario Odin...")
-    cursor_odin.execute(
-        "SELECT COUNT(*) FROM inventario_completo ic LEFT JOIN prodotti p ON ic.id_prod = p.id LEFT JOIN sedi s ON s.id = ic.id_sede;")
-    return cursor_odin.fetchone()[0]
-
-def get_odin_inventario_completo_as_df(batchsize=5):
-    global total_rows_odin
-    offset = 0
-    with tqdm(total=total_rows_odin, desc="Carico dati Odin...", unit="righe") as pbar:
-        while offset < total_rows_odin:
-            query = f"""
-            SELECT
-            IFNULL(cod,old_cod) AS sku,
-            qta,
-            luogo,
-            sezione AS sez,
-            s.nome AS sede,
-            ic.data_creazione AS `data`,
-            ic.ultima_modifica AS ultima_modifica,
-            ic.note,
-            u.username
-            FROM inventario_completo ic 
-            LEFT JOIN prodotti p ON ic.id_prod = p.id
-            LEFT JOIN sedi s ON s.id = ic.id_sede
-            LEFT JOIN users u ON u.id = ic.id_user
-            LIMIT {batchsize} OFFSET {offset};
-            """
-            cursor_odin.execute(query)
-            result = cursor_odin.fetchall()
-            if not result:
-                break
-            result = pd.DataFrame.from_records(result,columns=["sku", "qta", "luogo", "sez", "sede", "data", "ultima_modifica", "note", "username"])
-            yield result
-            offset+=batchsize
-            pbar.update(len(result))
-
-
-def import_df_in_ts_by_date(df):
-    if args.verbose:
-        print("Eseguo query importazione in ts_bt_date...")
-    for _, row in tqdm(df.iterrows(), total=df.shape[0]):
-        cursor_app.execute("""
-        INSERT OR IGNORE INTO ts_by_date (sku, data, qta, dep)
-        VALUES (?,?,?,?)
-        """, (row['sku'], row['data'], row['qta'], row['dep']))
-    conn_app.commit()
-
-
-def import_df_in_odin_by_date(df):
-    for _, row in tqdm(df.iterrows(), total=df.shape[0], desc="Eseguo query importazione in odin_by_date...", unit="righe"):
-        row['data'] = row['data'].strftime('%Y-%m-%d %H:%M:%S')
-        row['ultima_modifica'] = row['ultima_modifica'].strftime('%Y-%m-%d %H:%M:%S')
-        cursor_app.execute("""
-        INSERT INTO odin_by_date (sku, qta, luogo, sez, sede, data, ultima_modifica, note, username)
-        VALUES (?,?,?,?,?,?,?,?,?)
-        """, (
-            row['sku'],
-            row['qta'],
-            row['luogo'],
-            row['sez'],
-            row['sede'],
-            row['data'],
-            row['ultima_modifica'],
-            row['note'],
-            row['username']))
-    conn_app.commit()
-
-
-# endregion
-
+# end region
 # region Esecuzione
 # Connessione al database SQLite (DB app)
+if args.reset:
+    try:
+        os.remove(database)
+    except Exception as e:
+        print(e)
+        exit(1)
+
 conn_app = sqlite3.connect(database)
 cursor_app = conn_app.cursor()
 
@@ -245,6 +293,7 @@ cursor_odin = conn_odin.cursor()
 
 # Cache
 total_rows_odin = 0
+imported_ts_files = []
 
 if not os.path.exists(database) or args.reset:
     init_app_db()
@@ -255,11 +304,18 @@ if not args.skip_ts:
     if args.verbose:
         print(f"Importo file excel da {dir_ts_file_by_date}")
     files = os.listdir(dir_ts_file_by_date)
+    imported_ts_files = get_imported_ts_files()
+
     for i, filename in enumerate(files):
         print("Importo file {}/{}".format(i + 1, len(files)))
         if filename.endswith('.xlsx'):
+            if filename in imported_ts_files:
+                if args.verbose:
+                    print("File {} saltato.".format(filename))
+                continue
             file_path = os.path.join(dir_ts_file_by_date, filename)
             import_df_in_ts_by_date(get_xlsx_as_df(file_path, 'ts'))
+            insert_imported_ts_file(filename)
     if args.verbose:
         print("Dati importati in ts_by_date.")
 else:
