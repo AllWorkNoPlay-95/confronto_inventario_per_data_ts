@@ -63,7 +63,8 @@ def init_app_db():
                 data DATE NOT NULL,
                 ultima_modifica DATE NOT NULL,
                 note TEXT,
-                UNIQUE (sku, sez, sede, luogo)
+                username TEXT NOT NULL,
+                UNIQUE (sku, sez, sede, luogo, username)
         );
         """
         cursor_app.execute(create_table_query)
@@ -175,24 +176,26 @@ def get_odin_inventario_completo_as_df(batchsize=5):
         while offset < total_rows_odin:
             query = f"""
             SELECT
-            cod AS sku,
+            IFNULL(cod,old_cod) AS sku,
             qta,
             luogo,
             sezione AS sez,
             s.nome AS sede,
             ic.data_creazione AS `data`,
             ic.ultima_modifica AS ultima_modifica,
-            ic.note
+            ic.note,
+            u.username
             FROM inventario_completo ic 
             LEFT JOIN prodotti p ON ic.id_prod = p.id
             LEFT JOIN sedi s ON s.id = ic.id_sede
+            LEFT JOIN users u ON u.id = ic.id_user
             LIMIT {batchsize} OFFSET {offset};
             """
             cursor_odin.execute(query)
             result = cursor_odin.fetchall()
             if not result:
                 break
-            result = pd.DataFrame.from_records(result,columns=["sku", "qta", "luogo", "sez", "sede", "data", "ultima_modifica", "note"])
+            result = pd.DataFrame.from_records(result,columns=["sku", "qta", "luogo", "sez", "sede", "data", "ultima_modifica", "note", "username"])
             yield result
             offset+=batchsize
             pbar.update(len(result))
@@ -214,16 +217,18 @@ def import_df_in_odin_by_date(df):
         row['data'] = row['data'].strftime('%Y-%m-%d %H:%M:%S')
         row['ultima_modifica'] = row['ultima_modifica'].strftime('%Y-%m-%d %H:%M:%S')
         cursor_app.execute("""
-        INSERT OR IGNORE INTO odin_by_date (sku, qta, luogo, sez, sede, data, ultima_modifica, note)
-        VALUES (?,?,?,?,?,?,?,?)
-        """, (row['sku'],
-               row['qta'],
-               row['luogo'],
-               row['sez'],
-               row['sede'],
-               row['data'],
-               row['ultima_modifica'],
-               row['note']))
+        INSERT INTO odin_by_date (sku, qta, luogo, sez, sede, data, ultima_modifica, note, username)
+        VALUES (?,?,?,?,?,?,?,?,?)
+        """, (
+            row['sku'],
+            row['qta'],
+            row['luogo'],
+            row['sez'],
+            row['sede'],
+            row['data'],
+            row['ultima_modifica'],
+            row['note'],
+            row['username']))
     conn_app.commit()
 
 
