@@ -9,7 +9,6 @@ import re
 import argparse
 from datetime import datetime
 from sshtunnel import SSHTunnelForwarder
-
 # endregion
 
 # region Configurazione
@@ -22,6 +21,7 @@ parser.add_argument('-r', '--reset', action='store_true', help="Resetta il datab
 parser.add_argument('-v', '--verbose', action='store_true', help="Aumenta verbosità.")
 parser.add_argument('--skip-ts', action='store_true', help="Salta importazione file TS.")
 parser.add_argument('--skip-odin', action='store_true', help="Salta importazione Odin.")
+parser.add_argument('--skip-prod-meta', action='store_true', help="Salta importazione Meta Prodotti.")
 args = parser.parse_args()
 load_dotenv()  # Carica i segreti dall'.env
 
@@ -39,6 +39,7 @@ def init_app_db():
         print("Init App DB...")
 
     try:
+        # Tabella ts_by_date
         create_table_query = """
             CREATE TABLE IF NOT EXISTS ts_by_date (
                 sku TEXT NOT NULL,
@@ -53,6 +54,7 @@ def init_app_db():
         if args.verbose:
             print("Tabella ts_by_date creata.")
 
+        # Tabella odin_by_date
         create_table_query = """
             CREATE TABLE IF NOT EXISTS odin_by_date (
                 sku TEXT NOT NULL,
@@ -72,6 +74,7 @@ def init_app_db():
         if args.verbose:
             print("Tabella odin_by_date creata.")
 
+        # Tabella imported_ts_files
         create_table_query = """
                     CREATE TABLE IF NOT EXISTS imported_ts_files (
                         nome TEXT NOT NULL,
@@ -83,6 +86,21 @@ def init_app_db():
         conn_app.commit()
         if args.verbose:
             print("Tabella imported_ts_files creata.")
+
+        # Tabella products_meta
+        create_table_query = """
+                    CREATE TABLE IF NOT EXISTS products_meta (
+                        v_cod TEXT PRIMARY KEY,
+                        uf_cod TEXT,
+                        descrizione TEXT NOT NULL,
+                        ultima_modifica TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                    """
+        cursor_app.execute(create_table_query)
+        conn_app.commit()
+        if args.verbose:
+            print("Tabella products_meta creata.")
+
 
     except sqlite3.Error as e:
         print(e)
@@ -184,6 +202,56 @@ def get_odin_inventario_completo_as_df(batchsize=5):
                                                         "note", "username"])
             yield result
             offset += batchsize
+            pbar.update(len(result))
+
+
+def transfer_missing_products_meta_to_local_db(batchsize=5):
+    global conn_app
+    global cursor_app
+    global cursor_odin
+    result = None
+    query_missing_meta = """
+    SELECT sku
+    FROM odin_by_date
+    WHERE sku NOT IN (SELECT v_cod FROM products_meta);
+    """
+    cursor_app.execute(query_missing_meta)
+    missing_skus = [m[0] for m in cursor_app.fetchall()]
+    if args.verbose:
+        print("Ho trovato {} meta da scaricare.".format(len(missing_skus)))
+
+    with tqdm(total=len(missing_skus), desc="Trasferisco meta prodotti da Odin", unit="prodotti") as pbar:
+        while len(missing_skus)>0:
+            batchsize = min(batchsize, len(missing_skus))
+            this_missing_skus = [missing_skus.pop() for _ in range(batchsize)]
+            this_missing_skus_where = ["\"{}\"".format(s) for s in this_missing_skus]
+            this_missing_skus_where = ",".join(this_missing_skus_where)
+            if args.verbose:
+                print(this_missing_skus)
+
+            query = """
+                SELECT
+                IFNULL(cod,old_cod) AS v_cod,
+                uf_cod,
+                descrizione
+                FROM prodotti p
+                WHERE cod IN ({})
+                OR old_cod IN ({});
+                """.format(this_missing_skus_where, this_missing_skus_where)
+
+            cursor_odin.execute(query)
+            result = cursor_odin.fetchall()
+            if not result:
+                break
+            result = pd.DataFrame.from_records(result,
+                                               columns=("v_cod", "uf_cod", "descrizione"))
+            # Insert
+            for _, row in result.iterrows():
+                cursor_app.execute("""
+                INSERT OR IGNORE INTO products_meta (v_cod, uf_cod, descrizione)
+                VALUES (?,?,?);
+                """, (row['v_cod'], row['uf_cod'], row['descrizione']))
+            conn_app.commit()
             pbar.update(len(result))
 
 
@@ -329,6 +397,15 @@ if not args.skip_odin:
     for batch in get_odin_inventario_completo_as_df(3):
         odin_df = pd.concat([odin_df, batch], ignore_index=True)
     import_df_in_odin_by_date(odin_df)
+else:
+    if args.skip_odin:
+        print("Salto importazione Odin. (--skip-odin)")
+
+# Meta
+if not args.skip_prod_meta:
+    transfer_missing_products_meta_to_local_db()
+else:
+    print("Salto importazione Meta Prodotti. (--skip-prod-meta)")
 
 # endregion
 # region Uscita
