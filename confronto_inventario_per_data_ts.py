@@ -3,6 +3,7 @@ import pandas as pd
 import sqlite3
 import mariadb
 import os
+from tabulate import tabulate
 from tqdm import tqdm
 from dotenv import load_dotenv
 import re
@@ -286,7 +287,41 @@ def import_df_in_odin_by_date(df):
             row['username']))
     conn_app.commit()
 
-
+def calc_discrepancy():
+    global cursor_app
+    query = """
+    SELECT 
+        o.sku,
+        m.uf_cod,
+        m.descrizione,
+        o.qta AS qta_rilevata,
+        totale_qta_rilevata.qta AS totale_qta_rilevata,
+        t.qta AS qta_ts,
+        totale_qta_rilevata.qta-t.qta AS discrepanza,
+        o.sede,
+        o.luogo,
+        o.sez,
+        t.dep AS deposito,
+        o."data" AS data_rilevazione,
+        t."data" AS data_ts,
+        o.note AS note_rilevazione,
+        o.username AS operatore
+    FROM odin_by_date o
+    LEFT JOIN products_meta m ON o.sku = m.v_cod
+    LEFT JOIN ts_by_date t ON t.sku = m.v_cod AND DATE(t."data") = DATE(o."data") AND t.dep = (CASE WHEN o.sede = "Rende" THEN "00" ELSE "FE" END)
+    LEFT JOIN (
+        SELECT o2.sku, o2.sede, SUM(o2.qta) AS qta
+        FROM odin_by_date o2
+        GROUP BY o2.sku, o2.sede
+        ) AS totale_qta_rilevata ON o.sku = totale_qta_rilevata.sku AND o.sede = totale_qta_rilevata.sede
+    WHERE (totale_qta_rilevata.qta-t.qta) != 0 OR o.qta IS NULL OR t.qta IS NULL
+    """
+    cursor_app.execute(query)
+    result = cursor_app.fetchall()
+    result = pd.DataFrame.from_records(result, columns=("sku", "uf_cod", "descrizione", "qta_rilevata", "totale_qta_rilevata", "qta_ts", "discrepanza", "sede", "luogo", "sez", "deposito", "data_rilevazione", "data_ts", "note_rilevazione", "operatore"))
+    pretty_result = result # Formatta meglio i risultati per la console
+    pretty_result['descrizione'] = pretty_result['descrizione'].apply(lambda desc: desc[:50] + "..." if len(desc)>50 else desc)
+    print(tabulate(pretty_result, headers='keys', tablefmt='psql'))
 # end region
 
 # region Files
@@ -338,7 +373,6 @@ def get_xlsx_as_df(file, table):
     if not required_columns.issubset(df.columns):
         print("Errore: Colonne mancanti nel file {file}")
         return
-
     return df
 
 
@@ -366,6 +400,7 @@ imported_ts_files = []
 if not os.path.exists(database) or args.reset:
     init_app_db()
 
+#region Importazioni
 # Iterazione su tutti i file Excel nelle directory
 # TS
 if not args.skip_ts:
@@ -406,7 +441,9 @@ if not args.skip_prod_meta:
     transfer_missing_products_meta_to_local_db()
 else:
     print("Salto importazione Meta Prodotti. (--skip-prod-meta)")
-
+# endregion
+# Per ogni voce nell'invetario, calcola la giacenza a quella data e confronta
+calc_discrepancy()
 # endregion
 # region Uscita
 conn_app.close()
