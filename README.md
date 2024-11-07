@@ -89,5 +89,5 @@ Questo progetto dimostra competenze avanzate nelle seguenti aree:
 - **Logging**: Aggiunta di un sistema di logging per migliorare il monitoraggio e la risoluzione dei problemi.
 - **Automatizzazione**: Pianificazione dello script per eseguire importazioni e confronti periodici tramite un task scheduler.
 
-### Conclusione
-Questo script è un esempio di applicazione che utilizza un'architettura modulare per gestire dati complessi in modo sicuro e versatile. La struttura, l’uso delle librerie e l’attenzione alla qualità del codice sono segni di una buona comprensione delle best practices di programmazione Python per il data engineering e la business intelligence.
+### (Per i recruiter) Conclusione
+Questo script, volutamente pubblico su GitHub, è un esempio di applicazione che utilizza un'architettura modulare per gestire dati complessi in modo sicuro e versatile. La struttura, l’uso delle librerie e l’attenzione alla qualità del codice sono segni di una buona comprensione delle best practices di programmazione Python per il data engineering e la business intelligence.
