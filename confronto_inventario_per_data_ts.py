@@ -16,6 +16,7 @@ from sshtunnel import SSHTunnelForwarder
 database = 'inventario.db'  # Nome del database SQLite
 dir_ts_file_by_date = 'db_files'  # Directory contenente i file Excel (nella root dello script)
 dir_odin_file = 'db_odin'
+excel_export_path = 'export'
 
 parser = argparse.ArgumentParser(description="Script di importazione e confronto inventario.")
 parser.add_argument('-r', '--reset', action='store_true', help="Resetta il database eliminando i dati esistenti.")
@@ -322,6 +323,12 @@ def calc_discrepancy():
     pretty_result = result # Formatta meglio i risultati per la console
     pretty_result['descrizione'] = pretty_result['descrizione'].apply(lambda desc: desc[:50] + "..." if len(desc)>50 else desc)
     print(tabulate(pretty_result, headers='keys', tablefmt='psql'))
+    # Chiedi se si vuole esportazione
+    response = input("Vuoi esportare questo confronto in un file (Excel) (s/N): ").strip().lower()
+    if response == 's':
+        export_as_excel(result)
+        print("Esportazione completata.")
+
 # end region
 
 # region Files
@@ -375,6 +382,26 @@ def get_xlsx_as_df(file, table):
         return
     return df
 
+def export_as_excel(df, path=excel_export_path):
+    filename = os.path.join(path, "Confronto Inventario del {}.xlsx".format(datetime.now().strftime("%d-%m-%Y %H-%M")))
+    os.makedirs(path, exist_ok=True) # Crea cartella se non esiste
+    with pd.ExcelWriter(filename, engine='xlsxwriter') as writer:
+        df.to_excel(writer, index=False, sheet_name="Confronto")
+
+        # Ottieni l'oggetto workbook e worksheet per applicare le formattazioni
+        workbook = writer.book
+        worksheet = writer.sheets["Confronto"]
+
+        # Applica una larghezza alle colonne per migliorare la leggibilità
+        for i, col in enumerate(df.columns):
+            max_length = max(df[col].astype(str).map(len).max(), len(col)) + 2
+            worksheet.set_column(i, i, max_length)
+
+        # Formatta l'intestazione
+        header_format = workbook.add_format(
+            {'bold': True, 'text_wrap': True, 'valign': 'center', 'fg_color': '#D7E4BC', 'border': 1})
+        for col_num, value in enumerate(df.columns.values):
+            worksheet.write(0, col_num, value, header_format)
 
 # end region
 # region Esecuzione
