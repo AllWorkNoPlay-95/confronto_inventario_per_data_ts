@@ -298,7 +298,7 @@ def calc_discrepancy():
         o.qta AS qta_rilevata,
         totale_qta_rilevata.qta AS totale_qta_rilevata,
         t.qta AS qta_ts,
-        totale_qta_rilevata.qta-t.qta AS discrepanza,
+        t.qta-totale_qta_rilevata.qta AS discrepanza,
         o.sede,
         o.luogo,
         o.sez,
@@ -387,6 +387,7 @@ def export_as_excel(df, path=excel_export_path):
     filename = os.path.join(path, "Confronto Inventario del {}.xlsx".format(datetime.now().strftime("%d-%m-%Y %H-%M")))
     os.makedirs(path, exist_ok=True) # Crea cartella se non esiste
     with pd.ExcelWriter(filename, engine='xlsxwriter') as writer:
+        df.insert(0, "Corretto", "") # Aggiungi una colonna nell'indice 0 per tenere traccia delle correzioni effettuate, verrà poi usato per aggiornare il db
         df.to_excel(writer, index=False, sheet_name="Confronto")
 
         # Ottieni l'oggetto workbook e worksheet per applicare le formattazioni
