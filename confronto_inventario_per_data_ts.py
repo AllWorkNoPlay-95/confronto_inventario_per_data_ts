@@ -24,9 +24,9 @@ parser.add_argument('-v', '--verbose', action='store_true', help="Aumenta verbos
 parser.add_argument('--skip-ts', action='store_true', help="Salta importazione file TS.")
 parser.add_argument('--skip-odin', action='store_true', help="Salta importazione Odin.")
 parser.add_argument('--skip-prod-meta', action='store_true', help="Salta importazione Meta Prodotti.")
+parser.add_argument('--print-results','-p', action='store_true', help="Stampa risultati nella console.")
 args = parser.parse_args()
 load_dotenv()  # Carica i segreti dall'.env
-
 
 # conn = None
 # cursor = None
@@ -320,9 +320,10 @@ def calc_discrepancy():
     cursor_app.execute(query)
     result = cursor_app.fetchall()
     result = pd.DataFrame.from_records(result, columns=("sku", "uf_cod", "descrizione", "qta_rilevata", "totale_qta_rilevata", "qta_ts", "discrepanza", "sede", "luogo", "sez", "deposito", "data_rilevazione", "data_ts", "note_rilevazione", "operatore"))
-    pretty_result = result # Formatta meglio i risultati per la console
-    pretty_result['descrizione'] = pretty_result['descrizione'].apply(lambda desc: desc[:50] + "..." if len(desc)>50 else desc)
-    print(tabulate(pretty_result, headers='keys', tablefmt='psql'))
+    if args.print_results:
+        pretty_result = result # Formatta meglio i risultati per la console
+        pretty_result['descrizione'] = pretty_result['descrizione'].apply(lambda desc: desc[:50] + "..." if len(desc)>50 else desc)
+        print(tabulate(pretty_result, headers='keys', tablefmt='psql'))
     # Chiedi se si vuole esportazione
     response = input("Vuoi esportare questo confronto in un file (Excel) (s/N): ").strip().lower()
     if response == 's':
