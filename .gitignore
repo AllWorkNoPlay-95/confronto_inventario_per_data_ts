@@ -1,2 +1,6 @@
-/inventario.db
 .env
+/inventario.db
+/odin_files
+/db_files
+/export
+/.idea
