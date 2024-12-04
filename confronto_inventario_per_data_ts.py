@@ -103,6 +103,24 @@ def init_app_db():
         if args.verbose:
             print("Tabella products_meta creata.")
 
+        # Tabella corrected
+        create_table_query = """
+                    CREATE TABLE IF NOT EXISTS corrected (
+                        v_cod TEXT NOT NULL,
+                        luogo TEXT NOT NULL,
+                        sez INTEGER NOT NULL,
+                        sede TEXT NOT NULL,
+                        username TEXT NOT NULL,
+                        ultima_modifica TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        note TEXT,
+                        UNIQUE (v_cod, sez, sede, luogo, username)
+                    );
+                    """
+        cursor_app.execute(create_table_query)
+        conn_app.commit()
+        if args.verbose:
+            print("Tabella corrected creata.")
+
 
     except sqlite3.Error as e:
         print(e)
@@ -269,12 +287,15 @@ def import_df_in_ts_by_date(df):
 
 
 def import_df_in_odin_by_date(df):
-    for _, row in tqdm(df.iterrows(), total=df.shape[0], desc="Eseguo query importazione in odin_by_date...",
-                       unit="righe"):
+    for _, row in tqdm(
+               df.iterrows(),
+               total=df.shape[0],
+               desc="Eseguo query importazione in odin_by_date...",
+               unit="righe"):
         row['data'] = row['data'].strftime('%Y-%m-%d %H:%M:%S')
         row['ultima_modifica'] = row['ultima_modifica'].strftime('%Y-%m-%d %H:%M:%S')
         cursor_app.execute("""
-        INSERT  OR IGNORE INTO odin_by_date (sku, qta, luogo, sez, sede, data, ultima_modifica, note, username)
+        INSERT OR IGNORE INTO odin_by_date (sku, qta, luogo, sez, sede, data, ultima_modifica, note, username)
         VALUES (?,?,?,?,?,?,?,?,?)
         """, (
             row['sku'],
@@ -285,8 +306,18 @@ def import_df_in_odin_by_date(df):
             row['data'],
             row['ultima_modifica'],
             row['note'],
-            row['username']))
+            row['username']
+            )
+        )
     conn_app.commit()
+
+def import_df_in_corrected(df):
+    for _, row in tqdm(
+        df.iterrows(),
+        total=df.shape[0],
+        desc="Importo dati di correzione...",
+        unit="righe"):
+            row['']
 
 def calc_discrepancy():
     global cursor_app
