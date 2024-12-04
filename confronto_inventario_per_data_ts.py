@@ -16,7 +16,7 @@ from sshtunnel import SSHTunnelForwarder
 database = 'inventario.db'  # Nome del database SQLite
 dir_ts_file_by_date = 'db_files'  # Directory contenente i file Excel (nella root dello script)
 # dir_odin_file = 'db_odin'
-dir_corrected_file = 'db_corrected'
+dir_corrected_file = 'corrected_files'
 excel_export_path = 'export'
 
 parser = argparse.ArgumentParser(description="Script di importazione e confronto inventario.")
@@ -113,10 +113,10 @@ def init_app_db():
                         luogo TEXT NOT NULL,
                         sez INTEGER NOT NULL,
                         sede TEXT NOT NULL,
-                        username TEXT NOT NULL,
+                        operatore TEXT NOT NULL,
                         ultima_modifica TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         note TEXT,
-                        UNIQUE (sku, sez, sede, luogo, username)
+                        UNIQUE (sku, sez, sede, luogo, operatore)
                     );
                     """
         cursor_app.execute(create_table_query)
@@ -178,7 +178,7 @@ def get_odin_inventario_completo_total_rows():
 def get_imported_files(file_type):
     global cursor_app
     query = """
-    SELECT nome FROM imported_files where type = {};
+    SELECT nome FROM imported_files where type = '{}';
     """.format(file_type)
     cursor_app.execute(query)
     result = cursor_app.fetchall()
@@ -320,7 +320,18 @@ def import_df_in_corrected(df):
         total=df.shape[0],
         desc="Importo dati di correzione...",
         unit="righe"):
-            pass
+        cursor_app.execute("""
+                INSERT OR IGNORE INTO corrected (sku, luogo, sez, sede, operatore)
+                VALUES (?,?,?,?,?)
+                """, (
+            row['sku'],
+            row['luogo'],
+            row['sez'],
+            row['sede'],
+            row['operatore']
+        )
+                           )
+    conn_app.commit()
 
 def calc_discrepancy():
     global cursor_app
@@ -402,17 +413,16 @@ def get_xlsx_as_df(file, table):
         df['data'] = data_date  # Assegna la data a tutte le righe
 
     elif table == 'corrected':
-        required_columns = {"sku", "qta", "dep", "data"}
+        required_columns = {"sku", "luogo", "sez", "sede", "operatore"}
         df.drop(df[df['Corretto'] != 1].index, inplace=True) # Elimina le righe che non sono state corrette
         # Rinomina delle colonne in base alla mappatura richiesta
-        df.rename(columns={
-            "Codice articolo": "sku",
-            "Giac.att.1": "qta",
-            "Dep": "dep"
-        }, inplace=True)
+        # df.rename(columns={
+        #     "operatore": "username",
+        # }, inplace=True)
 
     elif table == 'odin':
         pass
+
     df = df[list(required_columns)]
 
     # Controlla stato di salute del DataFrame e prova a correggerlo
