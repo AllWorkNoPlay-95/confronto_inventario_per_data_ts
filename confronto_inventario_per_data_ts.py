@@ -15,7 +15,8 @@ from sshtunnel import SSHTunnelForwarder
 # region Configurazione
 database = 'inventario.db'  # Nome del database SQLite
 dir_ts_file_by_date = 'db_files'  # Directory contenente i file Excel (nella root dello script)
-dir_odin_file = 'db_odin'
+# dir_odin_file = 'db_odin'
+dir_corrected_file = 'db_corrected'
 excel_export_path = 'export'
 
 parser = argparse.ArgumentParser(description="Script di importazione e confronto inventario.")
@@ -24,6 +25,7 @@ parser.add_argument('-v', '--verbose', action='store_true', help="Aumenta verbos
 parser.add_argument('--skip-ts', action='store_true', help="Salta importazione file TS.")
 parser.add_argument('--skip-odin', action='store_true', help="Salta importazione Odin.")
 parser.add_argument('--skip-prod-meta', action='store_true', help="Salta importazione Meta Prodotti.")
+parser.add_argument('--skip-corrected', action='store_true', help="Salta importazione giacenze corrette.")
 parser.add_argument('--print-results','-p', action='store_true', help="Stampa risultati nella console.")
 args = parser.parse_args()
 load_dotenv()  # Carica i segreti dall'.env
@@ -78,21 +80,22 @@ def init_app_db():
 
         # Tabella imported_ts_files
         create_table_query = """
-                    CREATE TABLE IF NOT EXISTS imported_ts_files (
+                    CREATE TABLE IF NOT EXISTS imported_files (
+                        type TEXT NOT NULL,
                         nome TEXT NOT NULL,
                         data TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        UNIQUE (nome)
+                        UNIQUE (type, nome)
                     );
                     """
         cursor_app.execute(create_table_query)
         conn_app.commit()
         if args.verbose:
-            print("Tabella imported_ts_files creata.")
+            print("Tabella imported_files creata.")
 
         # Tabella products_meta
         create_table_query = """
                     CREATE TABLE IF NOT EXISTS products_meta (
-                        v_cod TEXT PRIMARY KEY,
+                        sku TEXT PRIMARY KEY,
                         uf_cod TEXT,
                         descrizione TEXT NOT NULL,
                         ultima_modifica TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -106,14 +109,14 @@ def init_app_db():
         # Tabella corrected
         create_table_query = """
                     CREATE TABLE IF NOT EXISTS corrected (
-                        v_cod TEXT NOT NULL,
+                        sku TEXT NOT NULL,
                         luogo TEXT NOT NULL,
                         sez INTEGER NOT NULL,
                         sede TEXT NOT NULL,
                         username TEXT NOT NULL,
                         ultima_modifica TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         note TEXT,
-                        UNIQUE (v_cod, sez, sede, luogo, username)
+                        UNIQUE (sku, sez, sede, luogo, username)
                     );
                     """
         cursor_app.execute(create_table_query)
@@ -172,22 +175,22 @@ def get_odin_inventario_completo_total_rows():
     return cursor_odin.fetchone()[0]
 
 
-def get_imported_ts_files():
+def get_imported_files(file_type):
     global cursor_app
     query = """
-    SELECT nome FROM imported_ts_files;
-    """
+    SELECT nome FROM imported_files where type = {};
+    """.format(file_type)
     cursor_app.execute(query)
     result = cursor_app.fetchall()
     return [x[0] for x in result]
 
 
-def insert_imported_ts_file(name):
+def insert_imported_file(file_type, name):
     global cursor_app
     query = """
-    INSERT INTO imported_ts_files (nome) VALUES (?);
+    INSERT INTO imported_files (type, nome) VALUES (?,?);
     """
-    cursor_app.execute(query, (name,))
+    cursor_app.execute(query, (file_type, name))
     conn_app.commit()
 
 
@@ -233,7 +236,7 @@ def transfer_missing_products_meta_to_local_db(batchsize=5):
     query_missing_meta = """
     SELECT sku
     FROM odin_by_date
-    WHERE sku NOT IN (SELECT v_cod FROM products_meta);
+    WHERE sku NOT IN (SELECT sku FROM products_meta);
     """
     cursor_app.execute(query_missing_meta)
     missing_skus = [m[0] for m in cursor_app.fetchall()]
@@ -251,7 +254,7 @@ def transfer_missing_products_meta_to_local_db(batchsize=5):
 
             query = """
                 SELECT
-                IFNULL(cod,old_cod) AS v_cod,
+                IFNULL(cod,old_cod) AS sku,
                 uf_cod,
                 descrizione
                 FROM prodotti p
@@ -264,13 +267,13 @@ def transfer_missing_products_meta_to_local_db(batchsize=5):
             if not result:
                 break
             result = pd.DataFrame.from_records(result,
-                                               columns=("v_cod", "uf_cod", "descrizione"))
+                                               columns=("sku", "uf_cod", "descrizione"))
             # Insert
             for _, row in result.iterrows():
                 cursor_app.execute("""
-                INSERT OR IGNORE INTO products_meta (v_cod, uf_cod, descrizione)
+                INSERT OR IGNORE INTO products_meta (sku, uf_cod, descrizione)
                 VALUES (?,?,?);
-                """, (row['v_cod'], row['uf_cod'], row['descrizione']))
+                """, (row['sku'], row['uf_cod'], row['descrizione']))
             conn_app.commit()
             pbar.update(len(result))
 
@@ -317,7 +320,7 @@ def import_df_in_corrected(df):
         total=df.shape[0],
         desc="Importo dati di correzione...",
         unit="righe"):
-            row['']
+            pass
 
 def calc_discrepancy():
     global cursor_app
@@ -339,8 +342,8 @@ def calc_discrepancy():
         o.note AS note_rilevazione,
         o.username AS operatore
     FROM odin_by_date o
-    LEFT JOIN products_meta m ON o.sku = m.v_cod
-    LEFT JOIN ts_by_date t ON t.sku = m.v_cod AND DATE(t."data") = DATE(o."data") AND t.dep = (CASE WHEN o.sede = "Rende" THEN "00" ELSE "FE" END)
+    LEFT JOIN products_meta m ON o.sku = m.sku
+    LEFT JOIN ts_by_date t ON t.sku = m.sku AND DATE(t."data") = DATE(o."data") AND t.dep = (CASE WHEN o.sede = "Rende" THEN "00" ELSE "FE" END)
     LEFT JOIN (
         SELECT o2.sku, o2.sede, SUM(o2.qta) AS qta
         FROM odin_by_date o2
@@ -397,6 +400,16 @@ def get_xlsx_as_df(file, table):
             return  # Salta il file se la data non è valida
 
         df['data'] = data_date  # Assegna la data a tutte le righe
+
+    elif table == 'corrected':
+        required_columns = {"sku", "qta", "dep", "data"}
+        df.drop(df[df['Corretto'] != 1].index, inplace=True) # Elimina le righe che non sono state corrette
+        # Rinomina delle colonne in base alla mappatura richiesta
+        df.rename(columns={
+            "Codice articolo": "sku",
+            "Giac.att.1": "qta",
+            "Dep": "dep"
+        }, inplace=True)
 
     elif table == 'odin':
         pass
@@ -456,6 +469,7 @@ cursor_odin = conn_odin.cursor()
 # Cache
 total_rows_odin = 0
 imported_ts_files = []
+imported_corrected_files = []
 
 if not os.path.exists(database) or args.reset:
     init_app_db()
@@ -467,7 +481,7 @@ if not args.skip_ts:
     if args.verbose:
         print(f"Importo file excel da {dir_ts_file_by_date}")
     files = os.listdir(dir_ts_file_by_date)
-    imported_ts_files = get_imported_ts_files()
+    imported_ts_files = get_imported_files('ts_by_date')
 
     for i, filename in enumerate(files):
         print("Importo file {}/{}".format(i + 1, len(files)))
@@ -478,7 +492,7 @@ if not args.skip_ts:
                 continue
             file_path = os.path.join(dir_ts_file_by_date, filename)
             import_df_in_ts_by_date(get_xlsx_as_df(file_path, 'ts'))
-            insert_imported_ts_file(filename)
+            insert_imported_file('ts_by_date', filename)
     if args.verbose:
         print("Dati importati in ts_by_date.")
 else:
@@ -501,6 +515,30 @@ if not args.skip_prod_meta:
     transfer_missing_products_meta_to_local_db()
 else:
     print("Salto importazione Meta Prodotti. (--skip-prod-meta)")
+
+# Corrected
+if not args.skip_corrected:
+    if args.verbose:
+        print(f"Importo file excel da {dir_corrected_file}")
+    files = os.listdir(dir_corrected_file)
+    imported_corrected_files = get_imported_files('corrected')
+
+    for i, filename in enumerate(files):
+        print("Importo file {}/{}".format(i + 1, len(files)))
+        if filename.endswith('.xlsx'):
+            if filename in imported_corrected_files:
+                if args.verbose:
+                    print("File {} saltato.".format(filename))
+                continue
+            file_path = os.path.join(dir_corrected_file, filename)
+            import_df_in_corrected(get_xlsx_as_df(file_path, 'corrected'))
+            insert_imported_file('corrected', filename)
+    if args.verbose:
+        print("Dati importati in corrected.")
+else:
+    if args.verbose:
+        print("Salto importazione file Corrected. (--skip-corrected)")
+
 # endregion
 # Per ogni voce nell'invetario, calcola la giacenza a quella data e confronta
 calc_discrepancy()
