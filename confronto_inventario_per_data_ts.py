@@ -360,7 +360,16 @@ def calc_discrepancy():
         FROM odin_by_date o2
         GROUP BY o2.sku, o2.sede
         ) AS totale_qta_rilevata ON o.sku = totale_qta_rilevata.sku AND o.sede = totale_qta_rilevata.sede
-    WHERE (totale_qta_rilevata.qta-t.qta) != 0 OR o.qta IS NULL OR t.qta IS NULL
+    WHERE ((totale_qta_rilevata.qta-t.qta) != 0 OR o.qta IS NULL OR t.qta IS NULL)
+    AND NOT EXISTS (
+        SELECT 1
+        FROM corrected c
+        WHERE o.sku = c.sku
+        AND o.luogo = c.luogo
+        AND o.sez = c.sez
+        AND o.sede = c.sede
+        AND o.username = c.operatore
+    )
     """
     cursor_app.execute(query)
     result = cursor_app.fetchall()
